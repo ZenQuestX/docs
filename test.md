@@ -1,4 +1,4 @@
-以下は、Dockerを使用してFastAPI、SQLAlchemy、Alembic、SQLiteを組み合わせたバックエンド開発の詳細設計書です。ディレクトリ構成は粒度を細かくしています。
+もちろんです！以下に、Dockerを使用してFastAPI、SQLAlchemy、Alembic、SQLiteを組み合わせたバックエンド開発の詳細設計書を、ログ設定も含めて再構築しました。
 
 ## ディレクトリ構成
 
@@ -18,9 +18,13 @@ project/
 │   ├── core/
 │   │   ├── __init__.py
 │   │   ├── config.py
+│   │   ├── logging.py
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── base.py
+│   │   ├── crud/
+│   │   │   ├── __init__.py
+│   │   │   └── item.py
 │   │   ├── models/
 │   │   │   ├── __init__.py
 │   │   │   └── item.py
@@ -55,10 +59,13 @@ project/
 #### 2.2 `core/`
 
 - **config.py**: アプリケーションの設定を管理。
+- **logging.py**: ログ設定を管理。
 
 #### 2.3 `db/`
 
 - **base.py**: SQLAlchemyのベースクラスを定義。
+- **crud/**: CRUD操作を定義するディレクトリ。
+  - **item.py**: アイテムに関するCRUD操作を定義。
 - **models/**: データベースモデルを定義するディレクトリ。
   - **item.py**: アイテムモデルを定義。
 - **session.py**: データベースセッションを管理。
@@ -91,6 +98,9 @@ from fastapi import FastAPI
 from app.api.endpoints import items
 from app.db.session import engine
 from app.db.base import Base
+from app.core.logging import setup_logging
+
+setup_logging()
 
 Base.metadata.create_all(bind=engine)
 
@@ -103,15 +113,51 @@ def read_root():
     return {"message": "Hello World"}
 ```
 
+### `app/core/logging.py`
+
+```python
+import logging
+from logging.config import dictConfig
+
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+        },
+    },
+    "root": {
+        "level": "INFO",
+        "handlers": ["console"],
+    },
+}
+
+def setup_logging():
+    dictConfig(LOGGING_CONFIG)
+```
+
 ### `app/db/session.py`
 
 ```python
-from sqlalchemy import create_engine
+import logging
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+
+# SQLAlchemyのログを有効にする
+logging.basicConfig()
+logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 ```
 
@@ -140,10 +186,12 @@ class Item(Base):
 ### `app/api/endpoints/items.py`
 
 ```python
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from typing import List
 from app.db.session import SessionLocal
 from app.db.models.item import Item
+from app.db.crud import item as crud_item
 
 router = APIRouter()
 
@@ -156,8 +204,28 @@ def get_db():
 
 @router.get("/", response_model=List[Item])
 def read_items(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    items = db.query(Item).offset(skip).limit(limit).all()
+    items = crud_item.get_items(db, skip=skip, limit=limit)
     return items
+
+@router.post("/", response_model=Item)
+def create_item(item: Item, db: Session = Depends(get_db)):
+    return crud_item.create_item(db=db, item=item)
+```
+
+### `app/db/crud/item.py`
+
+```python
+from sqlalchemy.orm import Session
+from app.db.models.item import Item
+
+def get_items(db: Session, skip: int = 0, limit: int = 10):
+    return db.query(Item).offset(skip).limit(limit).all()
+
+def create_item(db: Session, item: Item):
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
 ```
 
 ### `docker/api/Dockerfile`
