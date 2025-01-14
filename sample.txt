@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import { useCollection } from '@cloudscape-design/collection-hooks';
+import {
+  CollectionPreferences,
+  PropertyFilter,
+  PropertyFilterProps,
+  Table
+} from '@cloudscape-design/components';
+
+interface Item {
+  id: string;
+  name: string;
+  age: number;
+  status: string;
+}
+
+const CustomFilterTable = () => {
+  const [items] = useState<Item[]>([
+    { id: '1', name: 'John', age: 25, status: 'active' },
+    { id: '2', name: 'Jane', age: 30, status: 'inactive' },
+    // ... more items
+  ]);
+
+  // カスタムオペレーターの定義
+  const filteringProperties: PropertyFilterProps.FilteringProperty[] = [
+    {
+      key: 'name',
+      operators: [':', '!:', '=', '!=', '^=', '$='],
+      propertyLabel: 'Name',
+      groupValuesLabel: 'Name values'
+    },
+    {
+      key: 'age',
+      operators: ['=', '!=', '>', '>=', '<', '<='],
+      propertyLabel: 'Age',
+      groupValuesLabel: 'Age values'
+    },
+    {
+      key: 'status',
+      operators: ['=', '!=', 'in', 'not-in'],
+      propertyLabel: 'Status',
+      groupValuesLabel: 'Status values'
+    }
+  ];
+
+  // カスタムオペレーターの比較関数
+  const customOperators: PropertyFilterProps.OperatorConfig = {
+    ':': {
+      label: 'contains',
+      match: (value: any, text: string) => 
+        String(value).toLowerCase().includes(text.toLowerCase()),
+      format: (value: string) => value
+    },
+    '!:': {
+      label: 'does not contain',
+      match: (value: any, text: string) => 
+        !String(value).toLowerCase().includes(text.toLowerCase()),
+      format: (value: string) => value
+    },
+    '^=': {
+      label: 'starts with',
+      match: (value: any, text: string) => 
+        String(value).toLowerCase().startsWith(text.toLowerCase()),
+      format: (value: string) => value
+    },
+    '$=': {
+      label: 'ends with',
+      match: (value: any, text: string) => 
+        String(value).toLowerCase().endsWith(text.toLowerCase()),
+      format: (value: string) => value
+    },
+    'in': {
+      label: 'is in',
+      match: (value: any, array: string[]) => array.includes(value),
+      format: (value: string[]) => value.join(', ')
+    },
+    'not-in': {
+      label: 'is not in',
+      match: (value: any, array: string[]) => !array.includes(value),
+      format: (value: string[]) => value.join(', ')
+    }
+  };
+
+  const { items: filteredItems, filterProps } = useCollection(items, {
+    filtering: {
+      empty: 'No matches found',
+      noFiltering: 'No filtering',
+      filteringProperties,
+      operators: customOperators
+    },
+    sorting: {},
+    selection: {}
+  });
+
+  return (
+    <Table
+      items={filteredItems}
+      filter={
+        <PropertyFilter
+          {...filterProps}
+          filteringProperties={filteringProperties}
+          customOperators={customOperators}
+        />
+      }
+      columnDefinitions={[
+        { header: 'Name', cell: item => item.name },
+        { header: 'Age', cell: item => item.age },
+        { header: 'Status', cell: item => item.status }
+      ]}
+    />
+  );
+};
+
+export default CustomFilterTable;
