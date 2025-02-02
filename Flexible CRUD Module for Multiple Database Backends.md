@@ -54,8 +54,11 @@ class BaseSchema(BaseModel):
 
     class Config:
         orm_mode = True
+```
 
 # repository.py
+
+```python
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar, Type, List, Optional
 from sqlalchemy.orm import Session
