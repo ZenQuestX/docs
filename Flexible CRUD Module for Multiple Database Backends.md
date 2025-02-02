@@ -85,8 +85,11 @@ class BaseRepository(ABC, Generic[T, CreateSchemaType, UpdateSchemaType]):
     @abstractmethod
     async def delete(self, id: int) -> bool:
         pass
+```
 
 # sqlalchemy_repository.py
+
+```python
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Type, List, Optional
@@ -133,8 +136,11 @@ class SQLAlchemyRepository(BaseRepository[T, CreateSchemaType, UpdateSchemaType]
         self.db.delete(db_item)
         self.db.commit()
         return True
+```
 
 # usage_example.py
+
+```python
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from typing import List
