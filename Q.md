@@ -1,0 +1,36 @@
+React, FastAPI, Amplify, Cognito (クライアントシークレット無効) 構成のシーケンス図 (mermaid 形式)
+sequenceDiagram
+    participant React App
+    participant Amplify SDK
+    participant Cognito Authorization Server
+    participant Cognito Token Endpoint
+    participant FastAPI Backend
+
+    React App->>Amplify SDK: 認可リクエスト (Authorization Code Grant)
+    Amplify SDK->>Cognito Authorization Server: 認可リクエスト (クライアントID)
+    Cognito Authorization Server-->>React App: 認可コード
+    React App->>Amplify SDK: 認可コード
+    Amplify SDK->>Cognito Token Endpoint: トークンリクエスト (認可コード, クライアントID)
+    Cognito Token Endpoint-->>Amplify SDK: アクセストークン, IDトークン
+    Amplify SDK->>React App: アクセストークン, IDトークン
+    React App->>FastAPI Backend: APIリクエスト (アクセストークン)
+    FastAPI Backend->>Cognito Authorization Server: トークン検証 (アクセストークン)
+    Cognito Authorization Server-->>FastAPI Backend: トークン検証結果
+    FastAPI Backend-->>React App: APIレスポンス
+
+解説
+ * 認可リクエスト: React アプリケーションは、Amplify SDK を通じて Cognito Authorization Server に認可リクエストを送信します。この際、クライアント ID が含まれますが、クライアントシークレットは送信されません。
+ * 認可コード発行: Cognito Authorization Server は、ユーザー認証後、React アプリケーションに認可コードを発行します。
+ * トークンリクエスト: React アプリケーションは、Amplify SDK を通じて Cognito Token Endpoint にトークンリクエストを送信します。この際、認可コードとクライアント ID が含まれます。
+ * アクセストークン発行: Cognito Token Endpoint は、認可コードとクライアント ID を検証し、アクセストークンと ID トークンを発行します。
+ * API リクエスト: React アプリケーションは、アクセストークンを Bearer トークンとして含めて FastAPI Backend に API リクエストを送信します。
+ * トークン検証: FastAPI Backend は、Cognito Authorization Server にアクセストークンの検証をリクエストします。
+ * API レスポンス: Cognito Authorization Server は、アクセストークンの検証結果を FastAPI Backend に返します。FastAPI Backend は、検証結果に基づいて API レスポンスを React アプリケーションに返します。
+ポイント
+ * クライアントシークレットは送信されません。
+ * 認可コードフロー (Authorization Code Grant) が使用されます。
+ * アクセストークンは、API リクエストのたびに検証されます。
+注意点
+ * このシーケンス図は、あくまで基本的な流れを示したものです。実際の実装では、エラー処理やリフレッシュトークンの取得など、より複雑な処理が必要になる場合があります。
+ * セキュリティを確保するために、HTTPS を使用し、トークンを安全に保管する必要があります。
+ご不明な点がありましたら、お気軽にご質問ください。
