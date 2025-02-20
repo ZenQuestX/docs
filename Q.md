@@ -34,3 +34,60 @@ sequenceDiagram
  * このシーケンス図は、あくまで基本的な流れを示したものです。実際の実装では、エラー処理やリフレッシュトークンの取得など、より複雑な処理が必要になる場合があります。
  * セキュリティを確保するために、HTTPS を使用し、トークンを安全に保管する必要があります。
 ご不明な点がありましたら、お気軽にご質問ください。
+
+
+
+`/abc` を開いた状態で **リロード** した場合、ALBのリスナールールによって `/index.html` にリダイレクトされます。  
+そのため、ブラウザのURLバーには `https://your-domain.com/index.html` が表示されてしまい、Reactのルーティングが崩れる可能性があります。  
+
+---
+
+## **このままだと起きる問題**
+❌ **React Routerで管理しているURLが `index.html` に変わってしまう**
+- 例えば `/dashboard` にアクセス → `index.html` にリダイレクト
+- Reactアプリ内のルーティングとは関係なく `index.html` がそのまま表示される
+- `index.html` の `react-router` の `BrowserRouter` で `/dashboard` に戻せない
+- **結果、ページが意図しない挙動になる**
+
+---
+
+## **解決策**
+### **① ALBのリスナールールを変更してリダイレクトではなく転送にする（推奨）**
+現在のリダイレクト (`RedirectConfig`) ではなく、S3へ**直接転送** (`ForwardConfig`) するようにします。
+
+```sh
+aws elbv2 create-rule \
+    --listener-arn <LISTENER_ARN> \
+    --priority 10 \
+    --conditions '[{"Field":"path-pattern","Values":["/*"]}]' \
+    --actions '[{"Type":"forward","TargetGroupArn":"<TARGET_GROUP_ARN>"}]'
+```
+
+#### **この方法のメリット**
+✅ **リロードしてもURLは変わらない**（`/abc` のまま）  
+✅ **React Routerが機能する**（`index.html` を返すだけなので）  
+✅ **すべてのパスで `index.html` を配信できる**  
+
+**💡 ALBをS3のVPCエンドポイントにフォワードするには、ALBのターゲットグループとしてS3エンドポイントを指定する必要があります。**
+
+---
+
+### **② CloudFrontを利用する**
+CloudFrontをALBの前に置いて、**403/404時に `index.html` を返す** ように設定する。
+
+1. **CloudFront のオリジンに ALB を指定**
+2. **カスタムエラーページを設定**
+   - `403` と `404` のエラー時に `/index.html` を返すようにする
+   - **レスポンスコードは `200` に変更**
+
+💡 **この方法なら、React Routerのルーティングも維持される！**
+
+---
+
+## **どっちの方法がいい？**
+| 方法 | メリット | デメリット |
+|------|--------|-----------|
+| **ALBのフォワード（①）** | シンプルで設定が少ない | ALBのターゲットグループにS3エンドポイントを設定する必要がある |
+| **CloudFront（②）** | キャッシュで高速化、React Router対応 | CloudFrontの設定が増える |
+
+👉 まず **ALBのフォワード（①）を試して、ダメならCloudFront（②）を追加** するのが良いですね！ 🚀
