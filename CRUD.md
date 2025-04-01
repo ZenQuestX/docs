@@ -14,6 +14,10 @@
 ## 2. SQLAlchemyモデル
 - ユーザー、投稿、コメントモデルの実装
 
+# SQLAlchemyとFastAPIのための汎用CRUD操作
+
+このリポジトリでは、SQLAlchemyとFastAPIを使用した多数のテーブル構成のデータベースに対して、シンプルかつ効率的にCRUD操作を行うための汎用的な実装を提供しています。
+
 ## 3. 汎用CRUD操作の実装 (Pydanticモデル使用)
 
 ```python
