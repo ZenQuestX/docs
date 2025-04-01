@@ -1,6 +1,19 @@
 # SQLAlchemyとFastAPIのための汎用CRUD操作
 
 このリポジトリでは、SQLAlchemyとFastAPIを使用した多数のテーブル構成のデータベースに対して、シンプルかつ効率的にCRUD操作を行うための汎用的な実装を提供しています。
+# SQLAlchemyとFastAPIのための汎用CRUD操作
+
+## 特徴
+- ...
+
+## 実装詳細
+
+## 1. Pydanticモデル
+- Pydanticの基本スキーマ
+- モデル別のPydanticスキーマ
+
+## 2. SQLAlchemyモデル
+- ユーザー、投稿、コメントモデルの実装
 
 ## 3. 汎用CRUD操作の実装 (Pydanticモデル使用)
 
