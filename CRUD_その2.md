@@ -131,38 +131,312 @@ class Professor(Base, TimeStampMixin):
     department = relationship("Department", back_populates="professors")
     mentored_students = relationship("Student", back_populates="mentor")
 ```
+models/student.py
+```python
+from sqlalchemy import Column, Integer, String, Boolean, Date, Float, ForeignKey, Enum
+from sqlalchemy.orm import relationship
+import enum
+from database import Base
+from models.base import TimeStampMixin
 
+class StudentStatus(enum.Enum):
+    ACTIVE = "active"
+    LEAVE = "leave"
+    GRADUATED = "graduated"
+    EXPELLED = "expelled"
 
+class Student(Base, TimeStampMixin):
+    """学生モデル"""
+    __tablename__ = "students"
 
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(String(20), nullable=False, unique=True, index=True)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    email = Column(String(100), nullable=False, unique=True)
+    phone = Column(String(20), nullable=True)
+    enrollment_date = Column(Date, nullable=False)
+    birth_date = Column(Date, nullable=True)
+    gpa = Column(Float, nullable=True)
+    status = Column(Enum(StudentStatus), default=StudentStatus.ACTIVE)
+    is_scholarship = Column(Boolean, default=False)
 
-
-
-
-
-
-
-
-
-
+    # 外部キー
+    department_id = Column(Integer, ForeignKey("departments.id"))
+    mentor_id = Column(Integer, ForeignKey("professors.id"), nullable=True)
+    
+    # リレーションシップ
+    department = relationship("Department", back_populates="students")
+    mentor = relationship("Professor", back_populates="mentored_students")
+```
 次に、Pydantic v2のモデルをschemasディレクトリに作成します：
 
+schemas/__init__.py
+```python
+from schemas.department import (
+    DepartmentBase, 
+    DepartmentCreate, 
+    DepartmentUpdate, 
+    DepartmentResponse
+)
+from schemas.professor import (
+    ProfessorBase, 
+    ProfessorCreate, 
+    ProfessorUpdate, 
+    ProfessorResponse
+)
+from schemas.student import (
+    StudentBase, 
+    StudentCreate, 
+    StudentUpdate, 
+    StudentResponse
+)
 
+__all__ = [
+    "DepartmentBase", "DepartmentCreate", "DepartmentUpdate", "DepartmentResponse",
+    "ProfessorBase", "ProfessorCreate", "ProfessorUpdate", "ProfessorResponse",
+    "StudentBase", "StudentCreate", "StudentUpdate", "StudentResponse"
+]
+```
+schemas/department.py
+```python
+from datetime import date, datetime
+from typing import Optional, List
+from pydantic import BaseModel, Field, EmailStr, HttpUrl, ConfigDict
 
+# ベースモデル
+class DepartmentBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="学科名")
+    code: str = Field(..., min_length=2, max_length=10, description="学科コード")
+    description: Optional[str] = Field(None, description="学科の説明")
+    foundation_date: Optional[date] = Field(None, description="設立日")
+    website: Optional[HttpUrl] = Field(None, description="学科のウェブサイト")
+    email: Optional[EmailStr] = Field(None, description="学科の連絡先メール")
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$", description="学科の電話番号")
+    address: Optional[str] = Field(None, max_length=255, description="学科の住所")
+    is_active: bool = Field(True, description="学科がアクティブかどうか")
 
+# 作成用モデル
+class DepartmentCreate(DepartmentBase):
+    pass
 
+# 更新用モデル（すべてのフィールドがオプショナル）
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    code: Optional[str] = Field(None, min_length=2, max_length=10)
+    description: Optional[str] = None
+    foundation_date: Optional[date] = None
+    website: Optional[HttpUrl] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$")
+    address: Optional[str] = Field(None, max_length=255)
+    is_active: Optional[bool] = None
 
+# レスポンス用モデル（IDとタイムスタンプを含む）
+class DepartmentResponse(DepartmentBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
 
+    # このクラスのモデル設定
+    model_config = ConfigDict(
+        from_attributes=True,  # SQLAlchemy モデルからの変換を許可
+        validate_assignment=True, # 代入時の検証を有効化
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "name": "コンピュータサイエンス学科",
+                "code": "CS",
+                "description": "コンピュータサイエンスと情報技術に関する教育と研究を行う学科です。",
+                "foundation_date": "1985-04-01",
+                "website": "https://example.com/cs",
+                "email": "cs@example.com",
+                "phone": "+81-3-1234-5678",
+                "address": "東京都新宿区○○ 1-2-3",
+                "is_active": True,
+                "created_at": "2023-01-01T00:00:00",
+                "updated_at": "2023-01-01T00:00:00"
+            }
+        }
+    )
 
+# 関連するPydanticモデルを使用するため、教授と学生のモデルを含むリスト対応モデル
+class DepartmentWithRelations(DepartmentResponse):
+    professors: List["ProfessorResponse"] = []
+    students: List["StudentResponse"] = []
 
+# 循環インポートを避けるため、"ProfessorResponse"と"StudentResponse"の型アノテーションを文字列にしています
+# 実際には__init__.pyでこれらの依存性を解決し、更新した型を使用します
+```
+schemas/professor.py
+```python
+from datetime import date, datetime
+from typing import Optional, List
+from enum import Enum
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
+# 学術ランクの列挙型
+class AcademicRank(str, Enum):
+    ASSISTANT = "assistant"
+    ASSOCIATE = "associate"
+    PROFESSOR = "professor"
+    DISTINGUISHED = "distinguished"
 
+# ベースモデル
+class ProfessorBase(BaseModel):
+    first_name: str = Field(..., min_length=1, max_length=50, description="名")
+    last_name: str = Field(..., min_length=1, max_length=50, description="姓")
+    email: EmailStr = Field(..., description="メールアドレス")
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$", description="電話番号")
+    hire_date: date = Field(..., description="雇用日")
+    birth_date: Optional[date] = Field(None, description="生年月日")
+    specialization: Optional[str] = Field(None, max_length=100, description="専門分野")
+    academic_rank: AcademicRank = Field(..., description="学術ランク")
+    is_tenured: bool = Field(False, description="終身在職権があるかどうか")
+    biography: Optional[str] = Field(None, description="経歴")
+    department_id: int = Field(..., description="所属学科ID")
 
+# 作成用モデル
+class ProfessorCreate(ProfessorBase):
+    pass
 
+# 更新用モデル（すべてのフィールドがオプショナル）
+class ProfessorUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$")
+    hire_date: Optional[date] = None
+    birth_date: Optional[date] = None
+    specialization: Optional[str] = Field(None, max_length=100)
+    academic_rank: Optional[AcademicRank] = None
+    is_tenured: Optional[bool] = None
+    biography: Optional[str] = None
+    department_id: Optional[int] = None
 
+# レスポンス用モデル（IDとタイムスタンプを含む）
+class ProfessorResponse(ProfessorBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
 
+    # このクラスのモデル設定
+    model_config = ConfigDict(
+        from_attributes=True,  # SQLAlchemy モデルからの変換を許可
+        validate_assignment=True, # 代入時の検証を有効化
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "first_name": "太郎",
+                "last_name": "山田",
+                "email": "taro.yamada@example.com",
+                "phone": "+81-90-1234-5678",
+                "hire_date": "2015-04-01",
+                "birth_date": "1975-06-15",
+                "specialization": "人工知能",
+                "academic_rank": "professor",
+                "is_tenured": True,
+                "biography": "AIとマシンラーニングの研究者として10年以上の経験を持つ。",
+                "department_id": 1,
+                "created_at": "2023-01-01T00:00:00",
+                "updated_at": "2023-01-01T00:00:00"
+            }
+        }
+    )
 
+# 関連情報を含むモデル（学科情報と指導学生情報）
+class ProfessorWithRelations(ProfessorResponse):
+    department: "DepartmentResponse"
+    mentored_students: List["StudentResponse"] = []
 
+# 循環インポートを避けるため、"DepartmentResponse"と"StudentResponse"の型アノテーションを文字列にしています
+```
+schemas/Student.py
+```python
+from datetime import date, datetime
+from typing import Optional
+from enum import Enum
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
+# 学生ステータスの列挙型
+class StudentStatus(str, Enum):
+    ACTIVE = "active"
+    LEAVE = "leave"
+    GRADUATED = "graduated"
+    EXPELLED = "expelled"
+
+# ベースモデル
+class StudentBase(BaseModel):
+    student_id: str = Field(..., min_length=3, max_length=20, description="学籍番号")
+    first_name: str = Field(..., min_length=1, max_length=50, description="名")
+    last_name: str = Field(..., min_length=1, max_length=50, description="姓")
+    email: EmailStr = Field(..., description="メールアドレス")
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$", description="電話番号")
+    enrollment_date: date = Field(..., description="入学日")
+    birth_date: Optional[date] = Field(None, description="生年月日")
+    gpa: Optional[float] = Field(None, ge=0.0, le=4.0, description="GPA (0.0-4.0)")
+    status: StudentStatus = Field(StudentStatus.ACTIVE, description="学生のステータス")
+    is_scholarship: bool = Field(False, description="奨学金を受けているかどうか")
+    department_id: int = Field(..., description="所属学科ID")
+    mentor_id: Optional[int] = Field(None, description="メンターの教授ID")
+
+# 作成用モデル
+class StudentCreate(StudentBase):
+    pass
+
+# 更新用モデル（すべてのフィールドがオプショナル）
+class StudentUpdate(BaseModel):
+    student_id: Optional[str] = Field(None, min_length=3, max_length=20)
+    first_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, pattern=r"^\+?[0-9\-\s]{7,20}$")
+    enrollment_date: Optional[date] = None
+    birth_date: Optional[date] = None
+    gpa: Optional[float] = Field(None, ge=0.0, le=4.0)
+    status: Optional[StudentStatus] = None
+    is_scholarship: Optional[bool] = None
+    department_id: Optional[int] = None
+    mentor_id: Optional[int] = None
+
+# レスポンス用モデル（IDとタイムスタンプを含む）
+class StudentResponse(StudentBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    # このクラスのモデル設定
+    model_config = ConfigDict(
+        from_attributes=True,  # SQLAlchemy モデルからの変換を許可
+        validate_assignment=True, # 代入時の検証を有効化
+        json_schema_extra={
+            "example": {
+                "id": 1,
+                "student_id": "CS2020001",
+                "first_name": "花子",
+                "last_name": "佐藤",
+                "email": "hanako.sato@example.com",
+                "phone": "+81-80-1234-5678",
+                "enrollment_date": "2020-04-01",
+                "birth_date": "2001-11-23",
+                "gpa": 3.8,
+                "status": "active",
+                "is_scholarship": True,
+                "department_id": 1,
+                "mentor_id": 1,
+                "created_at": "2023-01-01T00:00:00",
+                "updated_at": "2023-01-01T00:00:00"
+            }
+        }
+    )
+
+# 関連情報を含むモデル（学科情報とメンター情報）
+class StudentWithRelations(StudentResponse):
+    department: "DepartmentResponse"
+    mentor: Optional["ProfessorResponse"] = None
+
+# 循環インポートを避けるため、"DepartmentResponse"と"ProfessorResponse"の型アノテーションを文字列にしています
+```
 
 以上でPydantic v2を使用した3つのテーブル（学科・教授・学生）のモデル定義が完成しました。各モデルについての説明をします：
 
