@@ -1,0 +1,336 @@
+# models/form_models.py
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List
+from enum import Enum
+from datetime import datetime
+
+class WorkflowStatus(str, Enum):
+    DRAFT = "draft"              # 下書き
+    PENDING = "pending"          # 仮登録
+    DEPARTMENT_APPROVED = "department_approved"  # 所属承認済み
+    REGISTERED = "registered"    # 本登録
+
+class UserRole(str, Enum):
+    APPLICANT = "applicant"      # 申請者
+    APPROVER = "approver"        # 承認者
+    ADMIN = "admin"              # 管理者
+
+class ActionType(str, Enum):
+    SUBMIT = "submit"            # 申請
+    APPROVE = "approve"          # 承認
+    REJECT = "reject"            # 却下
+    SAVE_DRAFT = "save_draft"    # 下書き保存
+
+# サンプル申請フォームスキーマ
+class ApplicationFormData(BaseModel):
+    """申請フォームのデータモデル"""
+    applicant_name: str = Field(..., min_length=1, max_length=100, description="申請者名")
+    department: str = Field(..., min_length=1, max_length=50, description="所属部署")
+    email: str = Field(..., regex=r'^[^@]+@[^@]+\.[^@]+$', description="メールアドレス")
+    phone: Optional[str] = Field(None, regex=r'^\d{10,11}$', description="電話番号")
+    application_type: str = Field(..., description="申請種別")
+    reason: str = Field(..., min_length=10, max_length=500, description="申請理由")
+    
+class WorkflowApplication(BaseModel):
+    """ワークフロー申請のメインモデル"""
+    id: Optional[int] = Field(None, description="申請ID")
+    form_data: ApplicationFormData = Field(..., description="フォームデータ")
+    status: WorkflowStatus = Field(default=WorkflowStatus.DRAFT, description="ステータス")
+    applicant_id: str = Field(..., description="申請者のCognito ID")
+    current_approver_id: Optional[str] = Field(None, description="現在の承認者ID")
+    created_at: Optional[datetime] = Field(None, description="作成日時")
+    updated_at: Optional[datetime] = Field(None, description="更新日時")
+    workflow_history: List['WorkflowHistory'] = Field(default=[], description="ワークフロー履歴")
+
+class WorkflowHistory(BaseModel):
+    """ワークフロー履歴"""
+    id: Optional[int] = Field(None, description="履歴ID")
+    application_id: int = Field(..., description="申請ID")
+    actor_id: str = Field(..., description="操作者のCognito ID")
+    action: ActionType = Field(..., description="操作種別")
+    from_status: Optional[WorkflowStatus] = Field(None, description="変更前ステータス")
+    to_status: WorkflowStatus = Field(..., description="変更後ステータス")
+    comment: Optional[str] = Field(None, max_length=500, description="コメント")
+    timestamp: Optional[datetime] = Field(None, description="操作日時")
+
+# APIレスポンス用モデル
+class ApplicationResponse(BaseModel):
+    """申請データのレスポンス"""
+    application: WorkflowApplication
+    available_actions: List[ActionType] = Field(..., description="実行可能な操作")
+    form_schema: Dict[str, Any] = Field(..., description="フォームスキーマ")
+
+class WorkflowActionRequest(BaseModel):
+    """ワークフローアクション実行リクエスト"""
+    action: ActionType = Field(..., description="実行する操作")
+    comment: Optional[str] = Field(None, max_length=500, description="コメント")
+    form_data: Optional[ApplicationFormData] = Field(None, description="更新するフォームデータ")
+
+# services/workflow_service.py
+from typing import List, Optional, Dict, Any
+import json
+from models.form_models import *
+from services.cognito_service import CognitoService
+from database.repository import WorkflowRepository
+
+class WorkflowService:
+    def __init__(self, cognito_service: CognitoService, repository: WorkflowRepository):
+        self.cognito_service = cognito_service
+        self.repository = repository
+    
+    def get_form_schema(self, user_role: UserRole, status: WorkflowStatus) -> Dict[str, Any]:
+        """ユーザー役割とステータスに応じたフォームスキーマを生成"""
+        base_schema = ApplicationFormData.model_json_schema()
+        
+        # 権限に応じたフィールド制御
+        if user_role == UserRole.APPLICANT and status != WorkflowStatus.DRAFT:
+            # 申請者は申請後は編集不可
+            for field in base_schema.get("properties", {}):
+                base_schema["properties"][field]["readOnly"] = True
+        
+        return base_schema
+    
+    def get_available_actions(self, user_role: UserRole, status: WorkflowStatus, 
+                            applicant_id: str, user_id: str) -> List[ActionType]:
+        """ユーザー役割とステータスに応じた実行可能操作を取得"""
+        actions = []
+        
+        if user_role == UserRole.APPLICANT and applicant_id == user_id:
+            if status == WorkflowStatus.DRAFT:
+                actions.extend([ActionType.SAVE_DRAFT, ActionType.SUBMIT])
+        
+        elif user_role == UserRole.APPROVER:
+            if status == WorkflowStatus.PENDING:
+                actions.extend([ActionType.APPROVE, ActionType.REJECT])
+        
+        elif user_role == UserRole.ADMIN:
+            if status == WorkflowStatus.DEPARTMENT_APPROVED:
+                actions.extend([ActionType.APPROVE, ActionType.REJECT])
+        
+        return actions
+    
+    async def create_application(self, user_id: str, form_data: ApplicationFormData) -> WorkflowApplication:
+        """新規申請作成"""
+        application = WorkflowApplication(
+            form_data=form_data,
+            applicant_id=user_id,
+            status=WorkflowStatus.DRAFT
+        )
+        
+        application_id = await self.repository.create_application(application)
+        application.id = application_id
+        
+        # 履歴記録
+        await self._add_history(application_id, user_id, ActionType.SAVE_DRAFT, 
+                              None, WorkflowStatus.DRAFT, "新規作成")
+        
+        return application
+    
+    async def execute_action(self, application_id: int, user_id: str, 
+                           action_request: WorkflowActionRequest) -> WorkflowApplication:
+        """ワークフローアクション実行"""
+        application = await self.repository.get_application(application_id)
+        if not application:
+            raise ValueError("申請が見つかりません")
+        
+        user_role = await self.cognito_service.get_user_role(user_id)
+        available_actions = self.get_available_actions(
+            user_role, application.status, application.applicant_id, user_id
+        )
+        
+        if action_request.action not in available_actions:
+            raise ValueError("この操作は実行できません")
+        
+        old_status = application.status
+        new_status = self._get_next_status(application.status, action_request.action)
+        
+        # フォームデータ更新（必要な場合）
+        if action_request.form_data:
+            application.form_data = action_request.form_data
+        
+        application.status = new_status
+        
+        # 次の承認者設定
+        if new_status == WorkflowStatus.PENDING:
+            # 承認者グループの誰かに割り当て（簡略化）
+            application.current_approver_id = await self._get_next_approver(UserRole.APPROVER)
+        elif new_status == WorkflowStatus.DEPARTMENT_APPROVED:
+            # 管理者グループの誰かに割り当て
+            application.current_approver_id = await self._get_next_approver(UserRole.ADMIN)
+        
+        await self.repository.update_application(application)
+        await self._add_history(application_id, user_id, action_request.action,
+                              old_status, new_status, action_request.comment)
+        
+        return application
+    
+    def _get_next_status(self, current_status: WorkflowStatus, action: ActionType) -> WorkflowStatus:
+        """次のステータスを決定"""
+        status_transitions = {
+            (WorkflowStatus.DRAFT, ActionType.SUBMIT): WorkflowStatus.PENDING,
+            (WorkflowStatus.PENDING, ActionType.APPROVE): WorkflowStatus.DEPARTMENT_APPROVED,
+            (WorkflowStatus.DEPARTMENT_APPROVED, ActionType.APPROVE): WorkflowStatus.REGISTERED,
+            (WorkflowStatus.PENDING, ActionType.REJECT): WorkflowStatus.DRAFT,
+            (WorkflowStatus.DEPARTMENT_APPROVED, ActionType.REJECT): WorkflowStatus.DRAFT,
+        }
+        
+        if action == ActionType.SAVE_DRAFT:
+            return WorkflowStatus.DRAFT
+        
+        return status_transitions.get((current_status, action), current_status)
+    
+    async def _get_next_approver(self, role: UserRole) -> Optional[str]:
+        """次の承認者を取得（簡略化）"""
+        # 実装では、該当ロールのユーザーから適切な承認者を選択
+        return None
+    
+    async def _add_history(self, application_id: int, actor_id: str, action: ActionType,
+                         from_status: Optional[WorkflowStatus], to_status: WorkflowStatus,
+                         comment: Optional[str] = None):
+        """ワークフロー履歴追加"""
+        history = WorkflowHistory(
+            application_id=application_id,
+            actor_id=actor_id,
+            action=action,
+            from_status=from_status,
+            to_status=to_status,
+            comment=comment
+        )
+        await self.repository.add_history(history)
+
+# api/workflow_api.py
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List
+from models.form_models import *
+from services.workflow_service import WorkflowService
+from services.cognito_service import CognitoService
+from dependencies import get_current_user, get_workflow_service
+
+router = APIRouter(prefix="/workflow", tags=["workflow"])
+
+@router.post("/applications", response_model=ApplicationResponse)
+async def create_application(
+    form_data: ApplicationFormData,
+    current_user: dict = Depends(get_current_user),
+    workflow_service: WorkflowService = Depends(get_workflow_service)
+):
+    """新規申請作成"""
+    try:
+        user_id = current_user["sub"]
+        application = await workflow_service.create_application(user_id, form_data)
+        
+        user_role = await workflow_service.cognito_service.get_user_role(user_id)
+        available_actions = workflow_service.get_available_actions(
+            user_role, application.status, application.applicant_id, user_id
+        )
+        form_schema = workflow_service.get_form_schema(user_role, application.status)
+        
+        return ApplicationResponse(
+            application=application,
+            available_actions=available_actions,
+            form_schema=form_schema
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/applications/{application_id}", response_model=ApplicationResponse)
+async def get_application(
+    application_id: int,
+    current_user: dict = Depends(get_current_user),
+    workflow_service: WorkflowService = Depends(get_workflow_service)
+):
+    """申請詳細取得"""
+    try:
+        user_id = current_user["sub"]
+        application = await workflow_service.repository.get_application(application_id)
+        
+        if not application:
+            raise HTTPException(status_code=404, detail="申請が見つかりません")
+        
+        user_role = await workflow_service.cognito_service.get_user_role(user_id)
+        available_actions = workflow_service.get_available_actions(
+            user_role, application.status, application.applicant_id, user_id
+        )
+        form_schema = workflow_service.get_form_schema(user_role, application.status)
+        
+        return ApplicationResponse(
+            application=application,
+            available_actions=available_actions,
+            form_schema=form_schema
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/applications/{application_id}/actions", response_model=ApplicationResponse)
+async def execute_workflow_action(
+    application_id: int,
+    action_request: WorkflowActionRequest,
+    current_user: dict = Depends(get_current_user),
+    workflow_service: WorkflowService = Depends(get_workflow_service)
+):
+    """ワークフローアクション実行"""
+    try:
+        user_id = current_user["sub"]
+        application = await workflow_service.execute_action(
+            application_id, user_id, action_request
+        )
+        
+        user_role = await workflow_service.cognito_service.get_user_role(user_id)
+        available_actions = workflow_service.get_available_actions(
+            user_role, application.status, application.applicant_id, user_id
+        )
+        form_schema = workflow_service.get_form_schema(user_role, application.status)
+        
+        return ApplicationResponse(
+            application=application,
+            available_actions=available_actions,
+            form_schema=form_schema
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/applications", response_model=List[WorkflowApplication])
+async def list_applications(
+    current_user: dict = Depends(get_current_user),
+    workflow_service: WorkflowService = Depends(get_workflow_service)
+):
+    """申請一覧取得"""
+    try:
+        user_id = current_user["sub"]
+        user_role = await workflow_service.cognito_service.get_user_role(user_id)
+        
+        # 役割に応じた申請一覧取得
+        if user_role == UserRole.APPLICANT:
+            applications = await workflow_service.repository.get_applications_by_applicant(user_id)
+        elif user_role == UserRole.APPROVER:
+            applications = await workflow_service.repository.get_applications_by_status(
+                WorkflowStatus.PENDING
+            )
+        elif user_role == UserRole.ADMIN:
+            applications = await workflow_service.repository.get_applications_by_status(
+                WorkflowStatus.DEPARTMENT_APPROVED
+            )
+        else:
+            applications = []
+        
+        return applications
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/schema", response_model=Dict[str, Any])
+async def get_form_schema(
+    current_user: dict = Depends(get_current_user),
+    workflow_service: WorkflowService = Depends(get_workflow_service)
+):
+    """フォームスキーマ取得"""
+    try:
+        user_id = current_user["sub"]
+        user_role = await workflow_service.cognito_service.get_user_role(user_id)
+        schema = workflow_service.get_form_schema(user_role, WorkflowStatus.DRAFT)
+        return schema
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
