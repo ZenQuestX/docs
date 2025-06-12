@@ -1,6 +1,82 @@
-この度、私事により一週間の入院をいたしまして、皆様には多大なご迷惑をおかけし、心よりお詫び申し上げます。
-急な不在により、業務の引き継ぎや調整が不十分となり、皆様にご負担をおかけしてしまい申し訳ございませんでした。また、お忙しい中、私の業務をカバーしていただいた皆様には深く感謝申し上げます。
-本日より復職いたしましたので、ご報告申し上げます。おかげさまで体調も回復し、通常通り業務に取り組むことができる状態です。
-不在中に溜まった業務や連絡事項については、速やかに確認し対応してまいります。何かご不明な点やお急ぎの案件がございましたら、遠慮なくお声がけください。
-今後はより一層の体調管理に気をつけ、このような事態を避けるよう努めてまいります。
-改めて、この度はご迷惑をおかけし申し訳ございませんでした。今後ともよろしくお願いいたします。
+この問題はVSCodeとGitHubの認証プロセスでよく発生する問題です。以下の解決方法を順番に試してみてください。
+
+## 主な原因
+- VSCodeの認証トークンキャッシュの問題
+- ブラウザとVSCodeの通信エラー
+- ファイアウォールやプロキシの干渉
+- VSCode拡張機能の競合
+
+## 解決方法
+
+### 1. VSCodeの認証情報を完全にクリア
+```
+1. VSCodeでCtrl+Shift+P（Cmd+Shift+P on Mac）
+2. "Developer: Reload Window"を実行
+3. 再度Ctrl+Shift+P → "GitHub: Sign out"
+4. VSCodeを完全に終了
+```
+
+### 2. システムレベルでの認証情報削除
+**Windows:**
+- 資格情報マネージャーを開く
+- WindowsおよびWebの資格情報からGitHub関連の項目を削除
+
+**Mac:**
+```bash
+# キーチェーンからGitHub認証情報を削除
+security delete-internet-password -s github.com
+```
+
+**Linux:**
+```bash
+# GNOMEキーリングからGitHub認証情報を削除
+secret-tool clear server github.com
+```
+
+### 3. ブラウザのキャッシュクリア
+使用しているブラウザで：
+- GitHub.comのCookieとサイトデータを削除
+- ブラウザキャッシュをクリア
+
+### 4. VSCode設定のリセット
+VSCodeの設定ファイル（`settings.json`）で以下を確認：
+```json
+{
+    "github.copilot.enable": {
+        "*": true
+    }
+}
+```
+
+### 5. 手動でPersonal Access Tokenを使用
+1. GitHub → Settings → Developer settings → Personal access tokens
+2. 新しいトークンを生成（scopeで`copilot`を選択）
+3. VSCodeで`GitHub: Sign in with Personal Access Token`を使用
+
+### 6. 拡張機能の再インストール
+1. GitHub Copilot拡張機能を無効化
+2. VSCodeを再起動
+3. 拡張機能を再度有効化
+4. 必要に応じて拡張機能を一度アンインストールして再インストール
+
+### 7. ネットワーク設定の確認
+プロキシやファイアウォールを使用している場合：
+```json
+// settings.jsonに追加
+{
+    "http.proxy": "your-proxy-url",
+    "http.proxyStrictSSL": false
+}
+```
+
+### 8. VSCodeの完全なリセット（最終手段）
+```bash
+# VSCode設定フォルダをバックアップしてからリセット
+# Windows: %APPDATA%\Code
+# Mac: ~/Library/Application Support/Code
+# Linux: ~/.config/Code
+```
+
+通常は手順1-3で解決することが多いです。それでも解決しない場合は、手順4以降を試してみてください。
+
+どの手順で解決したか、または他にエラーメッセージが表示されているかを教えていただければ、より具体的な解決策をご提案できます。
