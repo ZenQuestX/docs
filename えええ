@@ -1,5 +1,5 @@
 この問題はVSCodeとGitHubの認証プロセスでよく発生する問題です。以下の解決方法を順番に試してみてください。
-
+https://stackblitz.com/~/github.com/ZenQuestX/my-cloudscape-app
 ## 主な原因
 - VSCodeの認証トークンキャッシュの問題
 - ブラウザとVSCodeの通信エラー
