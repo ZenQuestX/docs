@@ -1,48 +1,55 @@
-from datetime import datetime
-from typing import Optional
-from sqlalchemy import String, Integer, DateTime
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from pydantic import BaseModel, Field
+# PO補佐・バックログレディ化 カスタムエージェント設計指示書
 
-# SQLAlchemy モデル
-class Base(DeclarativeBase):
-    pass
+## 1. 目的
+PO補佐業務（Miro上のUSM/Feature作成 → Jiraバックログ起票・Miro可視化 → 実装順序・作業内容を含むレディ化）における人間の壁打ちコストを最小化するため、`.github/agent/` 配下に配置するカスタムエージェント群を設計・生成する。
 
-class UserORM(Base):
-    __tablename__ = "users"
-    
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_name: Mapped[str] = mapped_column(String(50))
-    email_address: Mapped[str] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime)
-    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+## 2. 設計の基本原則（必須制約）
+1. **単一責任と疎結合（AはBを知らない）**
+   - 各エージェントは自身の責務と「入力・出力の契約（インターフェース）」のみを知る。
+   - 他エージェントの内部処理や不要なツール（MCP）の仕様はコンテキストに含めない。
+   - 各エージェントに許可するツール（Miro MCP / Jira MCP / Workspace検索）は必要最小限に限定する。
+2. **書き込み前の確認ゲート（誤操作防止）**
+   - 外部ツールへの書き込み系操作（Miroの作成・更新、Jiraの起票・更新）は、必ず事前にドラフトを提示し、ユーザーの明示的な承認を得てから実行するルールを全エージェントに組み込む。
+3. **推測の禁止と差し戻し**
+   - 要件の曖昧さや既存コードとの矛盾をAIが推測で補完しない。
+   - 不足情報は `[要PO確認]` または「AC不足による差し戻し」として明示的に出力させる。
+4. **共通コンテキストの分離**
+   - 複数エージェントで共通利用するプロジェクト固有規約（Jiraのプロジェクトキー・Issueタイプ・カスタムフィールド、MiroのボードID・付箋色ルール、リポジトリのレイヤー構造等）は、共通ルールファイル（例：`docs/po-agent-rules.md`）に分離し、各 `.agent.md` から参照させる。
 
-# Pydantic モデル（エイリアス使用）
-class UserSchema(BaseModel):
-    id: int
-    name: str = Field(validation_alias="user_name")  # user_name → name
-    email: str = Field(validation_alias="email_address")  # email_address → email
-    created: datetime = Field(validation_alias="created_at")  # created_at → created
-    updated: Optional[datetime] = Field(validation_alias="updated_at")  # updated_at → updated
-    
-    class Config:
-        from_attributes = True  # SQLAlchemy モデルからの変換を有効化
+---
 
-# 使用例
-def convert_orm_to_pydantic(user_orm: UserORM) -> UserSchema:
-    return UserSchema.model_validate(user_orm)
+## 3. エージェント群の全体アーキテクチャ
 
-# 使用例
-if __name__ == "__main__":
-    # ORMオブジェクトの作成例
-    user = UserORM(
-        id=1,
-        user_name="yamada_taro",
-        email_address="yamada@example.com",
-        created_at=datetime.now(),
-        updated_at=None
-    )
-    
-    # Pydanticモデルに変換
-    user_schema = convert_orm_to_pydantic(user)
-    print(user_schema.model_dump())
+以下の責務分離に従ってエージェントを設計すること。
+
+| # | エージェント役割 | 許可する主なツール | 入力（契約） | 出力（契約） | 責務外（知らないこと） |
+|---|---|---|---|---|---|
+| 1 | **USM・Feature設計** | なし（またはドキュメント参照） | POの要望メモ・議事録 | 規約に沿ったUSM構造データ（アクティビティ、タスク、スライス、Feature枠、確認事項） | Miroの座標・MCP操作、Jira、実コード |
+| 2 | **Miro描画** | Miro MCP | #1の構造データ | Miroボードへの付箋・フレーム配置 | ビジネス要件の妥当性、Jira、実コード |
+| 3 | **What担当（PBI・AC作成）** | Miro MCP, Jira MCP | Miroの特定Featureフレーム | Jiraチケット（背景・目的・ユーザーストーリー・AC・対象外・不明点）の作成、およびMiro側へのJiraカード/リンク配置 | 実コード、技術的な実装方法（How） |
+| 4 | **How前半（影響調査・設計）** | Jira MCP, Workspace（実コード参照） | Jiraチケットキー（確定済みAC）＋実コード | 変更対象の実在ファイルパス一覧、DB/API/UIの変更方針、モジュール間依存関係（矛盾・不足があれば差し戻し） | Miro、作業者向けの細かい手順書化 |
+| 5 | **How後半（作業分解・順序化）** | Jira MCP | #4の影響調査・設計結果 | 依存関係に沿った実装順序、具体的な作業ステップ、完了確認手順（テスト・検証項目）のJiraチケット追記 | Miro、リポジトリ全体の探索 |
+
+※ #1と#2、またはプロジェクトの実態に応じて統合・分割が妥当な箇所があれば、事前調査の結果を踏まえて提案すること。
+
+---
+
+## 4. IDE AIへの実行ステップ
+
+いきなり `.agent.md` ファイルを生成せず、必ず以下の順序で進めること。
+
+### Step 1: プロジェクト実態の調査
+以下の情報をリポジトリおよびMCP経由で調査し、不足している情報があればユーザーに質問リストを提示すること。
+1. **リポジトリ構成:** ディレクトリ構造、主要フレームワーク、レイヤー間の依存ルール、テスト規約。
+2. **Jira仕様（Jira MCPで確認）:** 対象プロジェクトキー、使用するIssueタイプ、既存の良質なPBIチケットのDescription構成、必須フィールド。
+3. **Miro仕様（Miro MCPで確認）:** 対象ボードID、既存の付箋の色・フレーム命名規則、Miro MCPで利用可能なツール一覧（特にJira Cardウィジェット直接作成ツールの有無）。
+4. **Copilotカスタムエージェント仕様:** 現在の環境における `.github/agent/*.agent.md` のフロントマター形式（`name`, `description`, `tools`, `handoffs` 等のサポート状況）。
+
+### Step 2: 設計案とインターフェース（契約）の提示
+調査結果をもとに、以下をドラフトとして提示し、ユーザーの承認を得ること。
+1. 作成するファイル一覧（共通ルールファイル ＋ 各 `.agent.md`）。
+2. 各エージェント間の入出力フォーマット（特にJiraのDescriptionテンプレートと、#4→#5間の設計出力フォーマット）。
+3. 各エージェントに割り当てる具体的なツール名一覧。
+
+### Step 3: ファイル生成
+ユーザーの承認後、共通ルールファイルおよび `.github/agent/` 配下の各エージェント定義ファイルを生成すること。
